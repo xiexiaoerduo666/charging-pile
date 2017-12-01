@@ -1,0 +1,574 @@
+C51 COMPILER V9.00   MAIN                                                                  05/17/2017 12:41:02 PAGE 1   
+
+
+C51 COMPILER V9.00, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN main.OBJ
+COMPILER INVOKED BY: F:\keilc51\C51\BIN\C51.EXE main.c LARGE BROWSE DEBUG OBJECTEXTEND
+
+line level    source
+
+   1          #include "main.h"
+   2          
+   3          uchar j; 
+   4          unsigned char status;
+   5          uchar Timer0_1sFlag;
+   6          uchar Timer0Count;
+   7          uchar FirstFlag;
+   8          uchar K1Flag;
+   9          
+  10          char xdata dispbuff[32];
+  11          #define INBUF_LEN 8   //Êý¾Ý³¤¶È
+  12          //-------------------------------------------------
+  13          typedef struct 
+  14          {
+  15           vu8 bRxLength;                           // ÒÑ¾­½ÓÊÕµÄÊý¾Ý³¤¶È
+  16           vu8 bTxLength;                           // ÒÑ¾­·¢ËÍµÄÊý¾Ý³¤¶È
+  17           vu8 bTxBufferLength;             // ·¢ËÍ»º³åÇøÖÐµÄÊý¾Ý³¤¶È
+  18           u8  bRxBuffer[40];               // ½ÓÊÕÊý¾Ý»º³åÇø
+  19           //u8 bTxBuffer[38];          // ·¢ËÍÊý¾Ý»º³åÇø
+  20          }xdata UART_Buffer;
+  21          typedef union  
+  22          { 
+  23                  unsigned int word16; 
+  24              unsigned char byte[2]; 
+  25          }CRC_C; 
+  26          
+  27          u8 xdata USART_RX_BUF[64];     //½ÓÊÕ»º³å,×î´ó64¸ö×Ö½Ú.
+  28          u8 xdata USART_TX_BUF[64];     //·¢ËÍ»º³å,×î´ó64¸ö×Ö½Ú.
+  29          
+  30          UART_Buffer USART1_Buf;
+  31          u8 USART1_ReFlag=0;
+  32          CRC_C crcnow;
+  33          
+  34          u32 Voltage_data;  //µçÑ¹
+  35          u32 Power_data;    //¹¦ÂÊ
+  36          u32 Energy_data1;  //Ïû·Ñ
+  37          u32 Energy_data;   //µçÄÜ
+  38          
+  39          unsigned char code data1[16] = {0x12,0x34,0x56,0x78,0xED,0xCB,0xA9,0x87,0x12,0x34,0x56,0x78,0x01,0xFE,0x01
+             -,0xFE};
+  40          //M1¿¨µÄÄ³Ò»¿éÐ´ÎªÈçÏÂ¸ñÊ½£¬Ôò¸Ã¿éÎªÇ®°ü£¬¿É½ÓÊÕ¿Û¿îºÍ³äÖµÃüÁî
+  41          //4×Ö½Ú½ð¶î£¨µÍ×Ö½ÚÔÚÇ°£©£«4×Ö½Ú½ð¶îÈ¡·´£«4×Ö½Ú½ð¶î£«1×Ö½Ú¿éµØÖ·£«1×Ö½Ú¿éµØÖ·È¡·´£«1×Ö½Ú¿éµØÖ·£«1×Ö½Ú¿éµØÖ
+             -·È¡·´ 
+  42          unsigned char code data2[4]  = {0,0,0,0x01};
+  43          unsigned char code DefaultKey[6] = {0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF}; 
+  44          
+  45          unsigned char g_ucTempbuf[20];                        
+  46          void delay1(unsigned int z)
+  47          {
+  48   1              unsigned int x,y;
+  49   1              for(x=z;x>0;x--)
+  50   1              for(y=110;y>0;y--);     
+  51   1      } 
+  52                  
+  53          /*-----------------------------ÑÓÊ±º¯Êý 1MS/´Î-------------------------------*/
+C51 COMPILER V9.00   MAIN                                                                  05/17/2017 12:41:02 PAGE 2   
+
+  54          void DelayM(uint a)             
+  55          {
+  56   1              uchar i;
+  57   1              while( --a != 0) { for(i = 0; i < 125; i++); }                                     
+  58   1      }
+  59          /*¶¨Ê±Æ÷0³õÊ¼»¯---------------------------------------------------------------*/
+  60          void Timer0Init(void)
+  61          {
+  62   1              TMOD|=0x01;
+  63   1              TH0=0xB8; //·½Ê½1,20ms,12MHz
+  64   1              TL0=0x00;
+  65   1              TR0=1;
+  66   1              ET0=1;
+  67   1              EA=1;
+  68   1              Timer0_1sFlag=0;
+  69   1              Timer0Count=0;
+  70   1      }
+  71          /*¶¨Ê±Æ÷º¯Êý---------------------------------------------------------------*/
+  72          void Timer0(void)interrupt 1
+  73          {
+  74   1              TH0=0xB8;
+  75   1              TL0=0x00;
+  76   1              if(++Timer0Count>=50) // 1s
+  77   1              {
+  78   2                      Timer0Count=0;
+  79   2                      Timer0_1sFlag=1;
+  80   2              }
+  81   1      }
+  82          /*´®¿Ú³õÊ¼»¯---------------------------------------------------------------*/
+  83          void init_ser()
+  84          {    
+  85   1              SCON|=0x50;              
+  86   1              TMOD|=0X20; //¶¨Ê±Æ÷1¹¤×÷ÔÚ·½Ê½2  
+  87   1              PCON|= 0x80;//SMOD=1       
+  88   1              TH1=0Xf4;   //²¨ÌØÂÊ4800      
+  89   1              //TL1=0Xf4;   //12MHZ       
+  90   1              IE  |= 0x90;       //Enable Serial Interrupt 
+  91   1              TR1   = 1;          // timer 1 run   
+  92   1      }
+  93          /********************************************************************
+  94          ** //Ïò´®¿Ú·¢ËÍÒ»¸ö×Ö·û 
+  95          ********************************************************************/
+  96          void send_char_com(unsigned char ch)  
+  97          {
+  98   1              ES     =   0;  //¹Ø´®¿ÚÖÐ¶Ï
+  99   1              TI     =   0;  //ÇåÁã´®¿Ú·¢ËÍÍê³ÉÖÐ¶ÏÇëÇó±êÖ¾
+ 100   1              SBUF   =   ch;
+ 101   1              while(TI ==0); //µÈ´ý·¢ËÍÍê³É
+ 102   1              TI     =   0;  //ÇåÁã´®¿Ú·¢ËÍÍê³ÉÖÐ¶ÏÇëÇó±êÖ¾
+ 103   1              ES     =   1;  //ÔÊÐí´®¿ÚÖÐ¶Ï
+ 104   1      }
+ 105          /********************************************************************
+ 106          ** //Ïò´®¿Ú·¢ËÍÒ»¸ö×Ö·û´®£¬strlenÎª¸Ã×Ö·û´®³¤¶È 
+ 107          ********************************************************************/
+ 108          void send_string_com(unsigned char *str,unsigned int strlen)
+ 109          {
+ 110   1              unsigned int k=0;
+ 111   1              do 
+ 112   1              {
+ 113   2                      send_char_com(*(str + k));
+ 114   2                      k++;
+ 115   2              } 
+C51 COMPILER V9.00   MAIN                                                                  05/17/2017 12:41:02 PAGE 3   
+
+ 116   1              while(k < strlen);
+ 117   1      }
+ 118          unsigned int calccrc(unsigned char crcbuf,unsigned int crc) 
+ 119          { 
+ 120   1              unsigned char i; 
+ 121   1              unsigned char chk; 
+ 122   1              crc=crc ^ crcbuf; 
+ 123   1              for(i=0;i<8;i++) 
+ 124   1              {               
+ 125   2                      chk=( unsigned char)(crc&1); 
+ 126   2                      crc=crc>>1; 
+ 127   2                      crc=crc&0x7fff;  
+ 128   2                      if (chk==1)
+ 129   2                      crc=crc^0xa001;  
+ 130   2                      crc=crc&0xffff;  
+ 131   2              }
+ 132   1              return crc; 
+ 133   1      }
+ 134          
+ 135          /*Ð£ÑéºÍº¯Êý---------------------------------------------------------------------*/
+ 136          unsigned int chkcrc(unsigned char *buf,unsigned char len)
+ 137          { 
+ 138   1              unsigned char hi,lo; 
+ 139   1              unsigned int i;  
+ 140   1              unsigned int crc;  
+ 141   1              crc=0xFFFF; 
+ 142   1              for(i=0;i<len;i++) 
+ 143   1              { 
+ 144   2                      crc=calccrc(*buf,crc); 
+ 145   2                      buf++; 
+ 146   2              } 
+ 147   1              hi=( unsigned char)(crc%256); 
+ 148   1              lo=( unsigned char)(crc/256);
+ 149   1              crc=(((unsigned int)(hi))<<8)|lo; 
+ 150   1              return crc;  
+ 151   1      }
+ 152          
+ 153          /*¶ÁÈ¡º¯Êý---------------------------------------------------------------------*/
+ 154          //¶ÁÈ¡µçÑ¹£¬µçÁ÷£¬¹¦ÂÊ£¬ÒòËØºÍµçÁ¿Öµ
+ 155          #if 0
+              void read_data(void) 
+              { 
+               //   if((Clock.Second%2)==1)      //2 Ãë¶ÁÒ»´Î 
+                  {       
+                          USART_TX_BUF[0]=0x01;      //³­¶ÁÄ£¿éµÄ ID ºÅ   
+                      USART_TX_BUF[1]=0x03; 
+                      USART_TX_BUF[2]=0x00; 
+                      USART_TX_BUF[3]=0x48; 
+                      USART_TX_BUF[4]=0x00; 
+                      USART_TX_BUF[5]=0x06;//0x06 
+                      crcnow.word16=chkcrc(USART_TX_BUF,6); 
+                      USART_TX_BUF[6]=crcnow.byte[0];       //CRC Ð§ÑéµÍ×Ö½ÚÔÚÇ° 
+                      USART_TX_BUF[7]=crcnow.byte[1]; 
+                    //USART_TX_BUF[6]=0x45;//0x45           //CRC Ð§ÑéµÍ×Ö½ÚÔÚÇ° 
+                    //USART_TX_BUF[7]=0xde;//0xde 
+                      send_string_com(USART_TX_BUF,8);      //·¢ËÍ 8 ¸öÊý¾Ý£¬
+              
+                  } 
+              }
+              #endif
+ 176          void read_data(void)
+ 177          {
+C51 COMPILER V9.00   MAIN                                                                  05/17/2017 12:41:02 PAGE 4   
+
+ 178   1              //union crcdata
+ 179   1              //{
+ 180   1              //      unsigned int word16;
+ 181   1              //      unsigned char  byte[2];
+ 182   1              //}crcnow;
+ 183   1              //if(read_enable==1)   // µ½Ê±¼ä³­¶Á135Ä£¿é£¬×îÐ¡³­¶Á¼ä¸ô1ÃëÖÓ
+ 184   1              {
+ 185   2                //read_enable=0;
+ 186   2                      USART_TX_BUF[0]=0x01;   //135Ä£¿éµÄIDºÅ£¬Ä¬ÈÏIDÎª0x01
+ 187   2                      USART_TX_BUF[1]=0x03;
+ 188   2                      USART_TX_BUF[2]=0x00;
+ 189   2                      USART_TX_BUF[3]=0x48;
+ 190   2                      USART_TX_BUF[4]=0x00;
+ 191   2                      USART_TX_BUF[5]=0x08;
+ 192   2                      crcnow.word16=chkcrc(USART_TX_BUF,6);
+ 193   2                      USART_TX_BUF[6]=crcnow.byte[0];    //CRCÐ§ÑéµÍ×Ö½ÚÔÚÇ°
+ 194   2                      USART_TX_BUF[7]=crcnow.byte[1];
+ 195   2                      send_string_com(USART_TX_BUF,8);   //·¢ËÍ8¸öÊý¾Ý£¬Çë¸ù¾Ýµ¥Æ¬»úÀàÐÍ×Ô¼º±à³Ì
+ 196   2              }
+ 197   1      }
+ 198          
+ 199          /*½âÎöº¯Êý---------------------------------------------------------------------*/
+ 200          #if 0
+              void Analysis_data(void) 
+              { 
+                      unsigned char i; 
+                  if(USART1_ReFlag==0x01)    //½ÓÊÕÍê³É 
+                  { 
+                      USART1_ReFlag=0;
+                      USART1_Buf.bRxLength=0;
+                              
+                      Voltage_data=(((unsigned int)(USART1_Buf.bRxBuffer[3]))<<8)|USART1_Buf.bRxBuffer[4]; //Voltage_dat
+             -a Îª unsigned int ÐÍ 
+                      Current_data=(((unsigned int)(USART1_Buf.bRxBuffer[5]))<<8)|USART1_Buf.bRxBuffer[6]; //Current_dat
+             -a Îª unsigned int ÐÍ 
+                      Power_data=(((unsigned int)(USART1_Buf.bRxBuffer[7]))<<8)|USART1_Buf.bRxBuffer[8];    //Power_data
+             - Îª unsigned int ÐÍ 
+                      Energy_data=(((unsigned   long)(USART1_Buf.bRxBuffer[9]))<<24)|(((unsigned   long)(USART1_Buf.bRxB
+             -uffer[10]))<<16)|(((unsigned long)(USART1_Buf.bRxBuffer[11]))<<8)|USART1_Buf.bRxBuffer[12];    ////Energy_data Îª unsign
+             -ed long ÐÍ 
+                      Pf_data=(((unsigned int)(USART1_Buf.bRxBuffer[13]))<<8)|USART1_Buf.bRxBuffer[14];    //Pf_data Îª 
+             -unsigned int ÐÍ 
+                      for(i=0;i++;i<18) 
+                      {
+                         USART1_Buf.bRxBuffer[i]=0;
+                      }  
+                  }     
+              } 
+              #endif
+ 221          void Analysis_data(void)
+ 222          {
+ 223   1              unsigned char i;
+ 224   1              //union crcdata
+ 225   1              //{
+ 226   1              //      unsigned int word16;
+ 227   1              //      unsigned char  byte[2];
+ 228   1              //}crcnow;
+ 229   1              if(USART1_ReFlag==0x01)  //½ÓÊÕÍê³É
+ 230   1              {
+ 231   2                      USART1_ReFlag=0;
+ 232   2                      USART1_Buf.bRxLength=0;
+ 233   2                      //if(RX_Buffer[0]==Read_ID)  //È·ÈÏIDÕýÈ·
+C51 COMPILER V9.00   MAIN                                                                  05/17/2017 12:41:02 PAGE 5   
+
+ 234   2                      {
+ 235   3                              //crcnow.word16=chkcrc(RX_Buffer,reveive_number-2);  //reveive_numbeÊÇ½ÓÊÕÊý¾Ý×Ü³¤¶È
+ 236   3                              //if((crcnow.byte[0]==RX_Buffer[reveive_numbe-1])&&(crcnow.byte[1]==RX_Buffer[reveive_numbe-2]))   //
+             -È·ÈÏCRCÐ£ÑéÕýÈ·
+ 237   3                              {       
+ 238   4                                      Voltage_data=(((unsigned long)(USART1_Buf.bRxBuffer[3]))<<24)|(((unsigned long)(USART1_Buf.bRxBuffer[4
+             -]))<<16)|(((unsigned  long)(USART1_Buf.bRxBuffer[5]))<<8)|USART1_Buf.bRxBuffer[6];
+ 239   4                                      //Current_data=(((unsigned long)(USART1_Buf.bRxBuffer[7]))<<24)|(((unsigned long)(USART1_Buf.bRxBuffer
+             -[8]))<<16)|(((unsigned        long)(USART1_Buf.bRxBuffer[9]))<<8)|USART1_Buf.bRxBuffer[10]; 
+ 240   4                                      Power_data=(((unsigned long)(USART1_Buf.bRxBuffer[11]))<<24)|(((unsigned long)(USART1_Buf.bRxBuffer[12
+             -]))<<16)|(((unsigned  long)(USART1_Buf.bRxBuffer[13]))<<8)|USART1_Buf.bRxBuffer[14]; 
+ 241   4                                      Energy_data=(((unsigned long)(USART1_Buf.bRxBuffer[15]))<<24)|(((unsigned long)(USART1_Buf.bRxBuffer[1
+             -6]))<<16)|(((unsigned long)(USART1_Buf.bRxBuffer[17]))<<8)|USART1_Buf.bRxBuffer[18]; 
+ 242   4                                      Energy_data1= 10*Energy_data;
+ 243   4                                      //Pf_data=(((unsigned long)(USART1_Buf.bRxBuffer[19]))<<24)|(((unsigned long)(USART1_Buf.bRxBuffer[20]
+             -))<<16)|(((unsigned long)(USART1_Buf.bRxBuffer[21]))<<8)|USART1_Buf.bRxBuffer[22]; 
+ 244   4                                      //CO2_data=(((unsigned long)(USART1_Buf[23]))<<24)|(((unsigned long)(RX_Buffer[24]))<<16)|(((unsigned 
+             -long)(RX_Buffer[25]))<<8)|RX_Buffer[26]; 
+ 245   4                              }
+ 246   3                      }
+ 247   2                      for(i=0;i++;i<38) 
+ 248   2                      {
+ 249   3                         USART1_Buf.bRxBuffer[i]=0;
+ 250   3                      }  
+ 251   2              }       
+ 252   1      }
+ 253          #if 0
+              //ÇåÁãµçÁ¿Öµ
+              void clear_data(void)
+              {
+                      USART_TX_BUF[0]=0x01;      //³­¶ÁÄ£¿éµÄ ID ºÅ   
+                      USART_TX_BUF[1]=0x10; 
+                      USART_TX_BUF[2]=0x00; 
+                      USART_TX_BUF[3]=0x0C; 
+                      USART_TX_BUF[4]=0x00; 
+                      USART_TX_BUF[5]=0x02; 
+                      USART_TX_BUF[6]=0x04;
+                      USART_TX_BUF[7]=0x00;
+                      USART_TX_BUF[8]=0x00;
+                      USART_TX_BUF[9]=0x00;
+                      USART_TX_BUF[10]=0x00;
+                      crcnow.word16=chkcrc(USART_TX_BUF,11); 
+                      USART_TX_BUF[11]=crcnow.byte[0];        //CRC Ð§ÑéµÍ×Ö½ÚÔÚÇ° 
+                      USART_TX_BUF[12]=crcnow.byte[1]; 
+                      send_string_com(USART_TX_BUF,13);      //·¢ËÍ 13 ¸öÊý¾Ý£¬
+              } 
+              #endif
+ 274          /********************************************************************
+ 275          ** //´®¿Ú½ÓÊÕÖÐ¶Ïº¯Êý
+ 276          ********************************************************************/
+ 277          void serial (void) interrupt 4
+ 278          {
+ 279   1              if(RI)
+ 280   1              {
+ 281   2                      RI=0;
+ 282   2                      USART1_Buf.bRxBuffer[USART1_Buf.bRxLength++]=SBUF;      
+ 283   2                      if(USART1_Buf.bRxLength==1)
+ 284   2                      {
+ 285   3                         if(USART1_Buf.bRxBuffer[0]!=0x01)
+ 286   3                         USART1_Buf.bRxLength=0;
+ 287   3                      }
+ 288   2                      if(USART1_Buf.bRxLength==2)
+C51 COMPILER V9.00   MAIN                                                                  05/17/2017 12:41:02 PAGE 6   
+
+ 289   2                      {
+ 290   3                         if(USART1_Buf.bRxBuffer[1]!=0x03)
+ 291   3                         USART1_Buf.bRxLength=0;
+ 292   3                      }
+ 293   2                      //USART1_ReFlag=0x01;   
+ 294   2                      if(USART1_Buf.bRxLength==38)
+ 295   2                      {
+ 296   3                              crcnow.word16=chkcrc(USART1_Buf.bRxBuffer,35);
+ 297   3                              if(crcnow.byte[0]==USART1_Buf.bRxBuffer[35]&&crcnow.byte[1]==USART1_Buf.bRxBuffer[36])
+ 298   3                              {
+ 299   4                                 USART1_ReFlag=0x01;            //½ÓÊÜÍê³É
+ 300   4                                 USART1_Buf.bRxLength=0;
+ 301   4                              }
+ 302   3                              
+ 303   3                      }               
+ 304   2                      if(USART1_Buf.bRxLength>38)
+ 305   2                      {
+ 306   3                              USART1_Buf.bRxLength=0;
+ 307   3                      }
+ 308   2              }
+ 309   1      }
+ 310          /*ÏÔÊ¾º¯Êý---------------------------------------------------------------------*/
+ 311          void data_display_1(void)
+ 312          {
+ 313   1          u32 temp,temp1;
+ 314   1              u32 Power_H,Power_L1,Power_L2;  //¹¦ÂÊ
+ 315   1              u32 Voltage_H,Voltage_L;//µçÑ¹
+ 316   1              u32 Energy_H,Energy_L1,Energy_L2,Energy_L3;//µçÁ¿
+ 317   1              u32 xiaofei_H,xiaofei_L1,xiaofei_L2,xiaofei_L3;//Ïû·Ñ
+ 318   1      
+ 319   1              Voltage_H = Voltage_data/10000;         //µçÑ¹ÏÔÊ¾Öµ´¦Àí
+ 320   1              Voltage_L = (Voltage_data%10000)/10;
+ 321   1       
+ 322   1              Power_H =  Power_data/10000;        //¹¦ÂÊÏÔÊ¾Öµ´¦Àí
+ 323   1              Power_L1=Power_data%10000/10;
+ 324   1      //      Power_L2=Power_data%10;
+ 325   1       
+ 326   1          temp=Energy_data/32;
+ 327   1              Energy_H = Energy_data/10;      //µçÁ¿ÏÔÊ¾Öµ´¦Àí
+ 328   1              Energy_L1= Energy_data%10;
+ 329   1      //      Energy_L2= Energy_L1/10;
+ 330   1      //      Energy_L3= Energy_L1%10;
+ 331   1      
+ 332   1          temp1=Energy_data1/32;
+ 333   1          xiaofei_H = Energy_data1/10;        //Ïû·ÑÏÔÊ¾Öµ´¦Àí
+ 334   1              xiaofei_L1= Energy_data1%10;
+ 335   1      //      Energy_L2= Energy_L1/10;
+ 336   1      //      Energy_L3= Energy_L1%10;
+ 337   1      
+ 338   1              write_com(0x30);
+ 339   1              write_com(0x0C); 
+ 340   1              write_com(0x06);
+ 341   1      
+ 342   1              write_com(0x82); lcm_w_word("µ±Ç°µç²ÎÊý"); 
+ 343   1              write_com(0x90); lcm_w_word("µçÑ¹£º       V");
+ 344   1              write_com(0x88); lcm_w_word("µçÁ¿£º       WH");
+ 345   1          write_com(0x98); lcm_w_word("Ïû·Ñ£º       Y");
+ 346   1       
+ 347   1          write_com(0x93);
+ 348   1              sprintf(dispbuff,"%d",(uint)Voltage_H);//µçÑ¹ÕûÊý²¿·ÖÏÔÊ¾
+ 349   1              lcm_w_word(dispbuff);
+ 350   1              lcm_w_word(".");                                //Ð¡Êýµã
+C51 COMPILER V9.00   MAIN                                                                  05/17/2017 12:41:02 PAGE 7   
+
+ 351   1              sprintf(dispbuff,"%d",(uint)Voltage_L);//µçÑ¹ÕûÊý²¿·ÖÏÔÊ¾
+ 352   1              lcm_w_word(dispbuff);   
+ 353   1      
+ 354   1      
+ 355   1      //      write_com(0x93);
+ 356   1      //      sprintf(dispbuff,"%d",(uint)Power_H);    //¹¦ÂÊ
+ 357   1      //      lcm_w_word(dispbuff);
+ 358   1      //      lcm_w_word(".");        
+ 359   1      //      sprintf(dispbuff,"%d",(uint)Power_L1);   //¹¦ÂÊ
+ 360   1      //      lcm_w_word(dispbuff);
+ 361   1      //      //sprintf(dispbuff,"%d",(uint)Power_L2); //¹¦ÂÊ
+ 362   1      //      //lcm_w_word(dispbuff);
+ 363   1       
+ 364   1              write_com(0x8B);
+ 365   1              sprintf(dispbuff,"%d",(uint)Energy_H);//µçÁ¿ÕûÊý²¿·ÖÏÔÊ¾
+ 366   1              lcm_w_word(dispbuff);
+ 367   1              lcm_w_word(".");                                //Ð¡Êýµã
+ 368   1              sprintf(dispbuff,"%d",(uint)Energy_L1); //µçÁ¿Ð¡Êý²¿·ÖÏÔÊ¾
+ 369   1              lcm_w_word(dispbuff);
+ 370   1      //      sprintf(dispbuff,"%d",(uint)Energy_L2); //µçÁ¿Ð¡Êý²¿·ÖÏÔÊ¾
+ 371   1      //      lcm_w_word(dispbuff);
+ 372   1      //      sprintf(dispbuff,"%d",(uint)Energy_L3); //µçÁ¿Ð¡Êý²¿·ÖÏÔÊ¾
+ 373   1      //      lcm_w_word(dispbuff);
+ 374   1      
+ 375   1          write_com(0x9B);
+ 376   1              sprintf(dispbuff,"%d",(uint)xiaofei_H);//µçÁ¿ÕûÊý²¿·ÖÏÔÊ¾
+ 377   1              lcm_w_word(dispbuff);
+ 378   1              lcm_w_word(".");                                //Ð¡Êýµã
+ 379   1              sprintf(dispbuff,"%d",(uint)xiaofei_L1); //µçÁ¿Ð¡Êý²¿·ÖÏÔÊ¾
+ 380   1              lcm_w_word(dispbuff);
+ 381   1      
+ 382   1      
+ 383   1      }
+*** WARNING C280 IN LINE 314 OF MAIN.C: 'Power_L2': unreferenced local variable
+*** WARNING C280 IN LINE 316 OF MAIN.C: 'Energy_L2': unreferenced local variable
+*** WARNING C280 IN LINE 316 OF MAIN.C: 'Energy_L3': unreferenced local variable
+*** WARNING C280 IN LINE 317 OF MAIN.C: 'xiaofei_L2': unreferenced local variable
+*** WARNING C280 IN LINE 317 OF MAIN.C: 'xiaofei_L3': unreferenced local variable
+ 384          
+ 385          
+ 386          /*ÏÔÊ¾º¯Êý---------------------------------------------------------------------*/
+ 387          void data_display_2(void)
+ 388          {
+ 389   1        display_type();
+ 390   1        display_cardnum();
+ 391   1      
+ 392   1         
+ 393   1      }
+ 394           
+ 395          /*³õÊ¼»¯º¯Êý---------------------------------------------------------------------*/
+ 396          void InitFunc(void)
+ 397          {
+ 398   1              K1=1;
+ 399   1              K2=1;
+ 400   1              K3=1;
+ 401   1              K4=1;
+ 402   1              BLK=0;
+ 403   1              BLK=1;
+ 404   1              lcm_init();                     //Òº¾§³õÊ¼»¯
+ 405   1              lcm_clr();            //ÇåÆÁ
+ 406   1      //      init_ser();
+ 407   1      //      Timer0Init();
+C51 COMPILER V9.00   MAIN                                                                  05/17/2017 12:41:02 PAGE 8   
+
+ 408   1      }
+ 409          
+ 410          void  InitializeSystem()   //¶¨Ê±Æ÷ºÍ²¨ÌØÂÊ
+ 411          {
+ 412   1              P0 = 0xFF; P1 = 0xFF; P3 = 0xFF;P2 = 0xFF;
+ 413   1          init_ser();
+ 414   1              Timer0Init();
+ 415   1      
+ 416   1      //
+ 417   1      //  TMOD=0x21;             //ÉèT0Îª·½Ê½1£¬GATE=1£»
+ 418   1      //      SCON=0x50;
+ 419   1      //      TH1=0xF4;          //²¨ÌØÂÊÎª2400bps
+ 420   1      //      TL1=0xF4;
+ 421   1      //      TH0=0;
+ 422   1      //      TL0=0; 
+ 423   1      //      TR0=1;  
+ 424   1      //      ET0=1;             //ÔÊÐíT0ÖÐ¶Ï
+ 425   1      //      TR1=1;                     //¿ªÆô¶¨Ê±Æ÷
+ 426   1      //      TI=1;
+ 427   1      //      EA=1;                           //¿ªÆô×ÜÖÐ¶Ï
+ 428   1      //      
+ 429   1      //      ES = 1;
+ 430   1      //      RI = 1;
+ 431   1      
+ 432   1      }
+ 433                     
+ 434           
+ 435          void main( )
+ 436          {    
+ 437   1            
+ 438   1           InitFunc();                   //Òº¾§
+ 439   1           InitializeSystem( );  //ÏµÍ³³õÊ¼»¯£¬ÉèÖÃ²¨ÌØÂÊ£¬¿ª¶¨Ê±Æ÷ÖÐ¶Ï
+ 440   1           PcdReset();                   //¸´Î»RC522£¬³É¹¦·µ»ØMI_OK
+ 441   1           PcdAntennaOff();      //¹Ø±ÕÌìÏß
+ 442   1           PcdAntennaOn();       //¿ªÆôÌìÏß£¬Ã¿´ÎÆô¶¯»ò¹Ø±ÕÌìÏß·¢ÉäÖ®¼äÓ¦ÖÁÉÙÓÐ1msµÄ¼ä¸ô
+ 443   1               display_welcome2();
+ 444   1      
+ 445   1               while(1)
+ 446   1               {
+ 447   2                if(K2==0)
+ 448   2             {
+ 449   3                  DelayM(20); 
+ 450   3                  if(K2==0)
+ 451   3                   {
+ 452   4                        
+ 453   4                        lcm_clr();
+ 454   4                     while(1)
+ 455   4                     {
+ 456   5                       Analysis_data();         //½âÎöÊý¾Ý
+ 457   5                       if(Timer0_1sFlag==1)
+ 458   5                        {
+ 459   6                                Timer0_1sFlag=0;
+ 460   6                                read_data(); 
+ 461   6                                }
+ 462   5                            DelayM(500);
+ 463   5                            data_display_1();//Êý¾ÝÏÔÊ¾
+ 464   5                                if(K1==0)  
+ 465   5                                {
+ 466   6                                              K1=0;
+ 467   6                                              K2=1;   
+ 468   6                                              break;
+ 469   6                                }
+C51 COMPILER V9.00   MAIN                                                                  05/17/2017 12:41:02 PAGE 9   
+
+ 470   5                         }
+ 471   4                  }    
+ 472   3                }
+ 473   2      
+ 474   2                else if(K1==0)
+ 475   2                  {
+ 476   3                       DelayM(20);
+ 477   3                       if(K1==0)
+ 478   3                         {
+ 479   4                           
+ 480   4                          while (1)
+ 481   4                   { 
+ 482   5                     status = PcdRequest(PICC_REQALL, g_ucTempbuf);//Ñ°¿¨
+ 483   5                     if (status != MI_OK)
+ 484   5                     {    
+ 485   6                      InitializeSystem( );    //³õÊ¼»¯
+ 486   6                      PcdReset();                         //¸´Î»
+ 487   6                      PcdAntennaOff();                //¹ØÌìÏß
+ 488   6                      PcdAntennaOn();                 //¿ªÌìÏß
+ 489   6                                  continue;
+ 490   6                      }
+ 491   5                           lcm_clr();
+ 492   5                           data_display_2();
+ 493   5                                       if(K2==0)
+ 494   5                                       { 
+ 495   6                                              K2=0;
+ 496   6                                              K1=1;
+ 497   6                                              //K2=0; 
+ 498   6                                              break;
+ 499   6                                       }
+ 500   5                                              
+ 501   5                                  
+ 502   5                      }       
+ 503   4                        }
+ 504   3                  }   
+ 505   2               }
+ 506   1      }
+ 507          
+ 508          
+ 509          
+ 510          
+ 511          
+ 512          
+ 513          
+ 514           
+ 515           
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =   1990    ----
+   CONSTANT SIZE    =     87    ----
+   XDATA SIZE       =    248      73
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =   ----    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  5 WARNING(S),  0 ERROR(S)

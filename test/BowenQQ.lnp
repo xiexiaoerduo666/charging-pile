@@ -1,0 +1,6 @@
+"main.obj",
+"LCD12864.obj",
+"RC522.obj",
+"12864.obj" 
+TO "BowenQQ" 
+RAMSIZE(256) 
